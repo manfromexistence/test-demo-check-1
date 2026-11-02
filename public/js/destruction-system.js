@@ -2969,6 +2969,23 @@ export class DestructionSystem {
     });
   }
 
+  triggerWarpShockwave(x, y, z) {
+    if (this.cameraSystem) {
+      this.cameraSystem.addTrauma(0.65);
+    }
+    this._spawnSparkStreaks(x, Math.max(0.6, y + 0.6), z, 0, 1, 40.0, 28);
+    for (let i = 0; i < 4; i++) {
+      this._spawnVolumetricPlume(
+        x + (Math.random() - 0.5) * 3,
+        Math.max(0.5, y + 0.5),
+        z + (Math.random() - 0.5) * 3,
+        'dust',
+        1.6,
+        2.6
+      );
+    }
+  }
+
   /**
    * Handles building collisions:
    * - Fractures 3D Voronoi wall shards with the building's exact exterior TSL material & world-space normals (zero dummy walls).

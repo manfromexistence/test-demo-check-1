@@ -34,31 +34,45 @@ import { polygonContact } from './building-collision.js';
 const SPAWN_Z = streetZ(37);
 const groundCollider = { type: 'ground' };
 
-const SPEED_500_MPH = 223.52; // 500 MPH in m/s
-const SPEED_1000_MPH = 447.04; // 1000 MPH in m/s
+export const MPH_TO_MS = 0.44704;
+export const MS_TO_MPH = 2.23694;
+export const LIGHT_SPEED_MPH = 670616629; // ~c
+export const LIGHT_SPEED_SIM_MS = 15000.0; // Relativistic warp speed in physics simulation units
+
+export const SPEED_PRESETS = [
+  { id: '40', label: '40 MPH', mph: 40, ms: 40 * MPH_TO_MS, desc: 'City Default (40 MPH)' },
+  { id: '100', label: '100 MPH', mph: 100, ms: 100 * MPH_TO_MS, desc: 'Highway Express (100 MPH)' },
+  { id: '300', label: '300 MPH', mph: 300, ms: 300 * MPH_TO_MS, desc: 'Hypercar Velocity (300 MPH)' },
+  { id: '500', label: '500 MPH', mph: 500, ms: 500 * MPH_TO_MS, desc: 'Supersonic (500 MPH)' },
+  { id: '1000', label: '1,000 MPH', mph: 1000, ms: 1000 * MPH_TO_MS, desc: 'Mach 1.3 Supersonic (1,000 MPH)' },
+  { id: '10000', label: '10,000 MPH', mph: 10000, ms: 10000 * MPH_TO_MS, desc: 'Hypersonic (10,000 MPH)' },
+  { id: 'light', label: '⚡ Light Speed', mph: LIGHT_SPEED_MPH, ms: LIGHT_SPEED_SIM_MS, desc: 'Max Light Speed (c)' }
+];
+
+const DEFAULT_SPEED_CAP = 40 * MPH_TO_MS; // Default 40 MPH = 17.8816 m/s
 
 const CAR_DRIVE = {
-  minSpeed: SPEED_500_MPH,
-  speed: SPEED_1000_MPH,
-  reverseSpeed: 110.0,
-  acceleration: 240.0,
+  minSpeed: 0,
+  speed: DEFAULT_SPEED_CAP,
+  reverseSpeed: 12.0,
+  acceleration: 32.0,
   rolling: 0.1,
   drag: 0.00008,
-  coast: 24.0,
-  brake: 280.0,
+  coast: 14.0,
+  brake: 38.0,
   wheelbase: 2.76,
-  grip: 260.0,
-  cornering: 260.0
+  grip: 42.0,
+  cornering: 55.0
 };
 const BICYCLE_DRIVE = {
-  minSpeed: SPEED_500_MPH,
-  speed: SPEED_1000_MPH,
-  reverseSpeed: 60.0,
-  acceleration: 260.0,
+  minSpeed: 0,
+  speed: DEFAULT_SPEED_CAP,
+  reverseSpeed: 8.0,
+  acceleration: 24.0,
   rolling: 0.08,
   drag: 0.0001,
-  coast: 20.0,
-  brake: 280.0
+  coast: 12.0,
+  brake: 32.0
 };
 
 function driveSpeed(speed, throttle, dt, drive) {
@@ -259,7 +273,74 @@ class ThirdPersonControllerManager {
       }
     });
 
+    this.speedPresetIndex = 0; // Default: 40 MPH
+    this.currentSpeedMph = 40;
+    this.currentSpeedCap = DEFAULT_SPEED_CAP;
+    this.isLightSpeed = false;
+    this.onSpeedChange = null;
+
     this.bindKeyboard();
+  }
+
+  setSpeedMph(mph, isLightSpeed = false) {
+    this.isLightSpeed = isLightSpeed || mph >= LIGHT_SPEED_MPH;
+    this.currentSpeedMph = this.isLightSpeed ? LIGHT_SPEED_MPH : Math.max(10, Math.min(LIGHT_SPEED_MPH, mph));
+    this.currentSpeedCap = this.isLightSpeed ? LIGHT_SPEED_SIM_MS : this.currentSpeedMph * MPH_TO_MS;
+
+    const spd = this.currentSpeedCap;
+    CAR_DRIVE.minSpeed = 0;
+    CAR_DRIVE.speed = spd;
+    CAR_DRIVE.acceleration = Math.max(32.0, Math.min(3200.0, spd * 0.95));
+    CAR_DRIVE.brake = Math.max(38.0, Math.min(4200.0, spd * 1.35));
+    CAR_DRIVE.reverseSpeed = Math.min(110.0, Math.max(12.0, spd * 0.35));
+    CAR_DRIVE.grip = Math.max(42.0, Math.min(800.0, spd * 0.65));
+    CAR_DRIVE.cornering = Math.max(55.0, Math.min(800.0, spd * 0.70));
+
+    BICYCLE_DRIVE.minSpeed = 0;
+    BICYCLE_DRIVE.speed = spd;
+    BICYCLE_DRIVE.acceleration = Math.max(24.0, Math.min(3200.0, spd * 0.90));
+    BICYCLE_DRIVE.brake = Math.max(32.0, Math.min(4200.0, spd * 1.35));
+
+    if (typeof this.onSpeedChange === 'function') {
+      this.onSpeedChange(this.currentSpeedMph, this.isLightSpeed, this.speedPresetIndex);
+    }
+  }
+
+  setSpeedPreset(identifier) {
+    let preset = null;
+    let idx = -1;
+    if (typeof identifier === 'number') {
+      idx = Math.max(0, Math.min(SPEED_PRESETS.length - 1, Math.round(identifier)));
+      preset = SPEED_PRESETS[idx];
+    } else {
+      idx = SPEED_PRESETS.findIndex((p) => p.id === String(identifier));
+      preset = idx >= 0 ? SPEED_PRESETS[idx] : SPEED_PRESETS[0];
+      if (idx < 0) idx = 0;
+    }
+    if (preset) {
+      this.speedPresetIndex = idx;
+      this.setSpeedMph(preset.mph, preset.id === 'light');
+    }
+  }
+
+  stepSpeedPreset(delta) {
+    const nextIdx = Math.max(0, Math.min(SPEED_PRESETS.length - 1, this.speedPresetIndex + delta));
+    this.setSpeedPreset(nextIdx);
+  }
+
+  boostActiveEntity() {
+    const ent = this.getActiveEntity();
+    if (!ent) return;
+    const target = this.currentSpeedCap;
+    ent.speed = target;
+    ent.vx = 0;
+    ent.vz = 0;
+    if (this.activeMode === 'helicopter') {
+      ent.verticalSpeed = 0;
+    }
+    if (this.destructionSystem && typeof this.destructionSystem.triggerWarpShockwave === 'function') {
+      this.destructionSystem.triggerWarpShockwave(ent.position.x, ent.position.y, ent.position.z);
+    }
   }
 
   setCollisionListener(listener) {
@@ -1377,32 +1458,29 @@ class ThirdPersonControllerManager {
     if (p.stumbleTimer > 0) {
       p.stumbleTimer = Math.max(0, p.stumbleTimer - dt);
     }
-    const dmgPenalty = Math.max(0.75, 1.0 - Math.min(1.0, (p.damage || 0) / 100) * 0.25);
-    const targetMax = SPEED_1000_MPH * dmgPenalty;
-    const targetMin = SPEED_500_MPH * dmgPenalty;
+    const targetMax = this.currentSpeedCap;
     const turnRate = 3.6;
 
     let targetSpeed = 0;
     if (this.keys.forward) {
-      targetSpeed = targetMin + (Math.max(0, this.keys.forward - 0.2) / 0.8) * (targetMax - targetMin);
-      if (p.speed < targetMin) {
-        p.speed = targetMin;
-      }
+      const throttle = typeof this.keys.forward === 'number' ? this.keys.forward : 1.0;
+      targetSpeed = targetMax * throttle;
     } else if (this.keys.backward) {
-      targetSpeed = -80.0 * this.keys.backward;
+      const throttle = typeof this.keys.backward === 'number' ? this.keys.backward : 1.0;
+      targetSpeed = -Math.min(25.0, targetMax * 0.35) * throttle;
     }
 
     if (this.keys.left) p.heading += turnRate * dt * this.keys.left;
     if (this.keys.right) p.heading -= turnRate * dt * this.keys.right;
 
-    const acceleration = 260.0;
+    const acceleration = Math.max(28.0, Math.min(2500.0, targetMax * 1.1));
     p.speed += Math.max(-acceleration * dt, Math.min(acceleration * dt, targetSpeed - p.speed));
 
     p.vx = (p.vx || 0) * Math.exp(-5.8 * dt);
     p.vz = (p.vz || 0) * Math.exp(-5.8 * dt);
 
     const personSpd = Math.max(Math.abs(p.speed), Math.hypot(p.vx, p.vz));
-    const personSteps = Math.max(4, Math.ceil((personSpd * dt) / 0.85));
+    const personSteps = Math.min(48, Math.max(4, Math.ceil((personSpd * dt) / 0.85)));
     const personStep = dt / personSteps;
 
     for (let s = 0; s < personSteps; s++) {
@@ -1452,7 +1530,7 @@ class ThirdPersonControllerManager {
     c.prevZ = prevZ;
 
     const estSpd = Math.max(Math.abs(c.speed), Math.hypot(c.vx || 0, c.vz || 0));
-    const steps = Math.max(4, Math.ceil((estSpd * dt) / 0.85));
+    const steps = Math.min(48, Math.max(4, Math.ceil((estSpd * dt) / 0.85)));
     const step = dt / steps;
     const steerResponse = 1 - Math.exp(-12 * step);
     const yawResponse = 1 - Math.exp(-8 * step);
@@ -1558,7 +1636,7 @@ class ThirdPersonControllerManager {
     b.vz = (b.vz || 0) * Math.exp(-5.5 * dt);
 
     const estBikeSpd = Math.max(Math.abs(b.speed), Math.hypot(b.vx, b.vz));
-    const bikeSteps = Math.max(4, Math.ceil((estBikeSpd * dt) / 0.85));
+    const bikeSteps = Math.min(48, Math.max(4, Math.ceil((estBikeSpd * dt) / 0.85)));
     const bikeStep = dt / bikeSteps;
 
     for (let s = 0; s < bikeSteps; s++) {
@@ -1594,9 +1672,8 @@ class ThirdPersonControllerManager {
     const h = this.entities.helicopter;
     h.prevX = h.position.x;
     h.prevZ = h.position.z;
-    const maxHorizSpeed = SPEED_1000_MPH;
-    const minHorizSpeed = SPEED_500_MPH;
-    const maxVertSpeed = 120.0;
+    const maxHorizSpeed = this.currentSpeedCap;
+    const maxVertSpeed = Math.max(24.0, Math.min(320.0, this.currentSpeedCap * 0.35));
 
     let fwdInput = 0;
     let yawInput = 0;
@@ -1617,14 +1694,10 @@ class ThirdPersonControllerManager {
 
     if (fwdInput !== 0) {
       const targetHeliSpd = fwdInput > 0
-        ? minHorizSpeed + (Math.max(0, fwdInput - 0.2) / 0.8) * (maxHorizSpeed - minHorizSpeed)
-        : -minHorizSpeed * 0.45 * Math.abs(fwdInput);
-      const heliAccel = 260.0;
-      if (fwdInput > 0 && h.speed < minHorizSpeed) {
-        h.speed = minHorizSpeed;
-      } else {
-        h.speed += Math.max(-heliAccel * dt, Math.min(heliAccel * dt, targetHeliSpd - h.speed));
-      }
+        ? maxHorizSpeed * Math.abs(fwdInput)
+        : -Math.min(35.0, maxHorizSpeed * 0.4) * Math.abs(fwdInput);
+      const heliAccel = Math.max(28.0, Math.min(3200.0, maxHorizSpeed * 0.95));
+      h.speed += Math.max(-heliAccel * dt, Math.min(heliAccel * dt, targetHeliSpd - h.speed));
     } else {
       h.speed *= Math.max(0, 1 - dt * 2.2);
     }
@@ -1642,7 +1715,7 @@ class ThirdPersonControllerManager {
     h.vz = (h.vz || 0) * Math.exp(-3.8 * dt);
 
     const estHeliSpd = Math.max(Math.abs(h.speed), Math.hypot(h.vx, h.vz), Math.abs(h.verticalSpeed));
-    const heliSteps = Math.max(4, Math.ceil((estHeliSpd * dt) / 1.0));
+    const heliSteps = Math.min(48, Math.max(4, Math.ceil((estHeliSpd * dt) / 1.0)));
     const heliStep = dt / heliSteps;
 
     for (let s = 0; s < heliSteps; s++) {

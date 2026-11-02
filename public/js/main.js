@@ -11,7 +11,7 @@ import { buildCityBlocks } from './buildings.js';
 import { buildStreetDetails } from './street-details.js';
 import { createTrafficSystem, createHighwayTraffic } from './traffic.js';
 import { buildRoadPaint } from './road-paint.js';
-import { ThirdPersonControllerManager } from './controllers.js';
+import { ThirdPersonControllerManager, SPEED_PRESETS } from './controllers.js';
 import { TouchControls } from './touch-controls.js';
 import { GamepadControls } from './gamepad-controls.js';
 import { CameraSystem, CAMERA_PRESETS } from './cameras.js';
@@ -346,6 +346,69 @@ async function initApp() {
   const btnResetCity = document.getElementById('btn-reset-city');
   const elLocation = document.getElementById('hud-location');
   const elControlsHint = document.getElementById('hud-controls-hint');
+
+  // Speed Limit Controls (40 MPH Default to Max Light Speed)
+  const speedPresetButtons = document.querySelectorAll('[data-speed-preset]');
+  const elSpeedPresetBadge = document.getElementById('hud-speed-preset-badge');
+  const speedSlider = document.getElementById('hud-speed-slider');
+  const btnSpeedMinus = document.getElementById('btn-speed-minus');
+  const btnSpeedPlus = document.getElementById('btn-speed-plus');
+  const btnSpeedBoost = document.getElementById('btn-speed-boost');
+
+  function updateSpeedUI(mph, isLightSpeed, presetIndex) {
+    if (elSpeedPresetBadge) {
+      if (isLightSpeed) {
+        elSpeedPresetBadge.textContent = '⚡ LIGHT SPEED';
+        elSpeedPresetBadge.classList.add('warp-active');
+      } else {
+        elSpeedPresetBadge.textContent = `${mph.toLocaleString('en-US')} MPH${mph === 40 ? ' (Default)' : ''}`;
+        elSpeedPresetBadge.classList.remove('warp-active');
+      }
+    }
+    speedPresetButtons.forEach((btn) => {
+      const p = btn.getAttribute('data-speed-preset');
+      const match = isLightSpeed ? (p === 'light') : (p === String(mph));
+      btn.classList.toggle('active', match);
+    });
+    if (speedSlider) {
+      const idx = presetIndex ?? (isLightSpeed ? 6 : SPEED_PRESETS.findIndex((p) => p.mph === mph));
+      if (idx >= 0) speedSlider.value = String(idx);
+    }
+  }
+
+  controllerManager.onSpeedChange = updateSpeedUI;
+  updateSpeedUI(controllerManager.currentSpeedMph, controllerManager.isLightSpeed, controllerManager.speedPresetIndex);
+
+  speedPresetButtons.forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const presetId = btn.getAttribute('data-speed-preset');
+      controllerManager.setSpeedPreset(presetId);
+    });
+  });
+
+  if (speedSlider) {
+    speedSlider.addEventListener('input', (e) => {
+      const idx = parseInt(e.target.value, 10);
+      controllerManager.setSpeedPreset(idx);
+    });
+  }
+
+  if (btnSpeedMinus) {
+    btnSpeedMinus.addEventListener('click', () => {
+      controllerManager.stepSpeedPreset(-1);
+    });
+  }
+  if (btnSpeedPlus) {
+    btnSpeedPlus.addEventListener('click', () => {
+      controllerManager.stepSpeedPreset(1);
+    });
+  }
+  if (btnSpeedBoost) {
+    btnSpeedBoost.addEventListener('click', () => {
+      controllerManager.boostActiveEntity();
+    });
+  }
+
   if (btnRepair) {
     btnRepair.addEventListener('click', () => {
       destructionSystem.repairEntity(controllerManager.getActiveEntity());
@@ -369,10 +432,10 @@ async function initApp() {
 
   // Keyboard guide for each mode: [keys, action]
   const controlHints = {
-    person: [[['W', 'S'], 'Walk / Run'], [['A', 'D'], 'Turn'], [['Space'], 'Jump'], [['R'], 'Repair'], [['Drag'], 'Orbit']],
-    car: [[['W', 'S'], 'Drive / Reverse'], [['A', 'D'], 'Steer'], [['B'], 'Horn'], [['R'], 'Repair'], [['Drag'], 'Orbit']],
-    cyclist: [[['W', 'S'], 'Pedal / Brake'], [['A', 'D'], 'Lean & Turn'], [['R'], 'Repair'], [['Drag'], 'Orbit']],
-    helicopter: [[['W', 'S'], 'Pitch'], [['A', 'D'], 'Yaw'], [['Space', 'E'], 'Ascend'], [['Q', 'C'], 'Descend'], [['R'], 'Repair']]
+    person: [[['W', 'S'], 'Walk / Run'], [['A', 'D'], 'Turn'], [['Space'], 'Jump'], [['[', ']'], 'Speed Limit'], [['Shift'], 'Boost'], [['R'], 'Repair'], [['Drag'], 'Orbit']],
+    car: [[['W', 'S'], 'Drive / Reverse'], [['A', 'D'], 'Steer'], [['[', ']'], 'Speed Limit'], [['Shift'], 'Boost'], [['B'], 'Horn'], [['R'], 'Repair'], [['Drag'], 'Orbit']],
+    cyclist: [[['W', 'S'], 'Pedal / Brake'], [['A', 'D'], 'Lean & Turn'], [['[', ']'], 'Speed Limit'], [['Shift'], 'Boost'], [['R'], 'Repair'], [['Drag'], 'Orbit']],
+    helicopter: [[['W', 'S'], 'Pitch'], [['A', 'D'], 'Yaw'], [['Space', 'E'], 'Ascend'], [['Q', 'C'], 'Descend'], [['[', ']'], 'Speed Limit'], [['Shift'], 'Boost'], [['R'], 'Repair']]
   };
   // Top speeds in mph (controllers.js caps them at 447 m/s / 1000 MPH): full scale of the speed meter
   const topSpeedMph = { person: 1000, car: 1000, cyclist: 1000, helicopter: 1000 };
@@ -668,6 +731,18 @@ async function initApp() {
           destructionSystem.repairEntity(controllerManager.getActiveEntity());
         }
         break;
+      case 'BracketLeft':
+        controllerManager.stepSpeedPreset(-1);
+        break;
+      case 'BracketRight':
+        controllerManager.stepSpeedPreset(1);
+        break;
+      case 'ShiftLeft':
+      case 'ShiftRight':
+        if (!e.repeat && !mapSystem.isFullMapOpen) {
+          controllerManager.boostActiveEntity();
+        }
+        break;
     }
   });
 
@@ -915,8 +990,25 @@ async function initApp() {
         elFps.textContent = String(currentFps);
         elFps.className = currentFps >= 50 ? 'fps-ok' : currentFps >= 30 ? 'fps-warn' : 'fps-bad';
       }
-      if (elSpeed) elSpeed.textContent = String(mph);
-      if (elSpeedMeter) elSpeedMeter.style.transform = `scaleX(${Math.min(1, mph / (topSpeedMph[mode] || 80))})`;
+      if (elSpeed) {
+        if (controllerManager.isLightSpeed && mph > 5000) {
+          elSpeed.textContent = '⚡ WARP';
+        } else {
+          elSpeed.textContent = String(mph.toLocaleString('en-US'));
+        }
+      }
+      const activeCapMph = controllerManager.currentSpeedMph || 40;
+      const ratio = controllerManager.isLightSpeed
+        ? Math.min(1, Math.max(0, mph / 1200))
+        : Math.min(1, Math.max(0, mph / Math.max(1, activeCapMph)));
+      if (elSpeedMeter) {
+        elSpeedMeter.style.transform = `scaleX(${ratio})`;
+        if (controllerManager.isLightSpeed) {
+          elSpeedMeter.style.background = 'linear-gradient(90deg, #38bdf8, #818cf8, #f43f5e)';
+        } else {
+          elSpeedMeter.style.background = 'var(--text)';
+        }
+      }
       if (elAltitude) elAltitude.textContent = altFt.toLocaleString('en-US');
       if (elIntegrity) {
         const integrity = Math.max(0, Math.round(activeEnt.integrity ?? 100));

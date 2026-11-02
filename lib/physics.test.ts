@@ -164,14 +164,25 @@ describe('Building Polygon & Courtyard Collision Physics', () => {
   });
 });
 
-describe('500 MPH to 1000 MPH Kinetic Energy & Destruction Physics', () => {
-  const SPEED_500_MPH = 223.52; // m/s
-  const SPEED_1000_MPH = 447.04; // m/s
+describe('Speed Controller & Kinetic Energy: 40 MPH Default to Max Light Speed', () => {
+  const MPH_TO_MS = 0.44704;
+  const SPEED_40_MPH = 40 * MPH_TO_MS; // 17.8816 m/s
+  const SPEED_100_MPH = 100 * MPH_TO_MS; // 44.704 m/s
+  const SPEED_500_MPH = 500 * MPH_TO_MS; // 223.52 m/s
+  const SPEED_1000_MPH = 1000 * MPH_TO_MS; // 447.04 m/s
+  const LIGHT_SPEED_SIM_MS = 15000.0; // m/s simulation units
 
   function calcBuildingDamage(entityMass: number, impactSpeed: number) {
     const kineticEnergy = 0.5 * entityMass * (impactSpeed * impactSpeed);
     return (kineticEnergy / 1050000.0) + (impactSpeed * 0.04);
   }
+
+  it('keeps 40 MPH as default city cruise speed with realistic low structural impact', () => {
+    const carMass = 1600;
+    const damage40 = calcBuildingDamage(carMass, SPEED_40_MPH);
+    assert.ok(damage40 >= 0.5 && damage40 <= 1.5, `40 MPH city bump should cause minor damage (~1%), got ${damage40}%`);
+    assert.ok(damage40 < 5.0, 'a standard 40 MPH city bump must never prematurely collapse a skyscraper');
+  });
 
   it('inflicts proportional ~47% damage at 500 MPH requiring 2-3 rams to collapse a building', () => {
     const carMass = 1600;
@@ -188,9 +199,20 @@ describe('500 MPH to 1000 MPH Kinetic Energy & Destruction Physics', () => {
     assert.ok(damage1000 >= 100.0, '1000 MPH supersonic impact must trigger instant total structural collapse');
   });
 
-  it('scales person and cyclist kinetic energy proportionally at 500-1000 MPH', () => {
+  it('delivers massive relativistic obliteration at Max Light Speed', () => {
+    const carMass = 1600;
+    const damageLightSpeed = calcBuildingDamage(carMass, LIGHT_SPEED_SIM_MS);
+    assert.ok(damageLightSpeed > 100000, `Light speed impact must deliver catastrophic kinetic obliteration, got ${damageLightSpeed}`);
+  });
+
+  it('scales person and cyclist kinetic energy proportionally at 40 MPH and 500 MPH', () => {
     const personMass = 90;
     const cyclistMass = 140;
+    const personDmg40 = calcBuildingDamage(personMass, SPEED_40_MPH);
+    const cyclistDmg40 = calcBuildingDamage(cyclistMass, SPEED_40_MPH);
+    assert.ok(personDmg40 < 1.0, `human bump at 40 MPH inflicts negligible building damage (< 1%), got ${personDmg40}`);
+    assert.ok(cyclistDmg40 > personDmg40, 'cyclist with bike mass has higher momentum than pedestrian');
+
     const personDmg500 = calcBuildingDamage(personMass, SPEED_500_MPH);
     const cyclistDmg500 = calcBuildingDamage(cyclistMass, SPEED_500_MPH);
     assert.ok(personDmg500 < 15, 'human impact at 500 MPH breaches wall with moderate structural damage');
