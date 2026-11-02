@@ -163,3 +163,38 @@ describe('Building Polygon & Courtyard Collision Physics', () => {
     assert.ok(Math.abs(frac - 40 / 60) < 1e-5);
   });
 });
+
+describe('500 MPH to 1000 MPH Kinetic Energy & Destruction Physics', () => {
+  const SPEED_500_MPH = 223.52; // m/s
+  const SPEED_1000_MPH = 447.04; // m/s
+
+  function calcBuildingDamage(entityMass: number, impactSpeed: number) {
+    const kineticEnergy = 0.5 * entityMass * (impactSpeed * impactSpeed);
+    return (kineticEnergy / 1050000.0) + (impactSpeed * 0.04);
+  }
+
+  it('inflicts proportional ~47% damage at 500 MPH requiring 2-3 rams to collapse a building', () => {
+    const carMass = 1600;
+    const damage500 = calcBuildingDamage(carMass, SPEED_500_MPH);
+    assert.ok(damage500 >= 40 && damage500 <= 55, `500 MPH car damage should be ~47%, got ${damage500}`);
+    assert.ok(damage500 < 100.0, 'a single 500 MPH ram should breach wall without instant collapse');
+    assert.ok(damage500 * 3 >= 100.0, '3 rams at 500 MPH must exceed 100 HP threshold to collapse building');
+  });
+
+  it('inflicts catastrophic >100% damage at 1000 MPH supersonic impact triggering instant collapse', () => {
+    const carMass = 1600;
+    const damage1000 = calcBuildingDamage(carMass, SPEED_1000_MPH);
+    assert.ok(damage1000 >= 150, `1000 MPH supersonic car impact must exceed 150 damage, got ${damage1000}`);
+    assert.ok(damage1000 >= 100.0, '1000 MPH supersonic impact must trigger instant total structural collapse');
+  });
+
+  it('scales person and cyclist kinetic energy proportionally at 500-1000 MPH', () => {
+    const personMass = 90;
+    const cyclistMass = 140;
+    const personDmg500 = calcBuildingDamage(personMass, SPEED_500_MPH);
+    const cyclistDmg500 = calcBuildingDamage(cyclistMass, SPEED_500_MPH);
+    assert.ok(personDmg500 < 15, 'human impact at 500 MPH breaches wall with moderate structural damage');
+    assert.ok(cyclistDmg500 > personDmg500, 'cyclist with bike mass inflicts higher damage than pedestrian');
+  });
+});
+

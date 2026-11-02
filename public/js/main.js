@@ -206,10 +206,10 @@ async function initApp() {
       const activePos = controllerManager.getActiveEntity()?.position;
       if (activePos) {
         const dist = Math.hypot(activePos.x - x, activePos.z - z);
-        if (dist < 45) {
-          const distFalloff = Math.max(0, 1 - dist / 45);
-          const kindMult = kind === 'building' ? 0.055 : kind === 'vehicle' ? 0.048 : 0.032;
-          cameraSystem.addTrauma(Math.min(0.85, speed * kindMult * distFalloff));
+        if (dist < 55) {
+          const distFalloff = Math.max(0, 1 - dist / 55);
+          const kindMult = kind === 'building' ? 0.045 : kind === 'vehicle' ? 0.038 : 0.025;
+          cameraSystem.addTrauma(Math.min(1.0, (speed * kindMult + 0.15) * distFalloff));
         }
       }
     },
@@ -374,8 +374,8 @@ async function initApp() {
     cyclist: [[['W', 'S'], 'Pedal / Brake'], [['A', 'D'], 'Lean & Turn'], [['R'], 'Repair'], [['Drag'], 'Orbit']],
     helicopter: [[['W', 'S'], 'Pitch'], [['A', 'D'], 'Yaw'], [['Space', 'E'], 'Ascend'], [['Q', 'C'], 'Descend'], [['R'], 'Repair']]
   };
-  // Top speeds in mph (controllers.js caps them at 8.2, 36, 19 & 52 m/s): full scale of the speed meter
-  const topSpeedMph = { person: 18, car: 81, cyclist: 43, helicopter: 116 };
+  // Top speeds in mph (controllers.js caps them at 447 m/s / 1000 MPH): full scale of the speed meter
+  const topSpeedMph = { person: 1000, car: 1000, cyclist: 1000, helicopter: 1000 };
 
   function renderControlHints(mode) {
     if (!elControlsHint) return;

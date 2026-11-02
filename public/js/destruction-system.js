@@ -176,7 +176,7 @@ export class DestructibleBuildingManager {
   constructor(system) {
     this.system = system;
     this.activeShards = [];
-    this.maxActiveShards = 96;
+    this.maxActiveShards = 192;
   }
 
   /**
@@ -390,7 +390,7 @@ export class DestructibleBuildingManager {
       const dy = yCenter - cy;
       const distFromImpact = Math.hypot(ds, dy) || 0.25;
       const radialBoost = Math.max(0.25, 1.0 - distFromImpact / Math.max(2.0, Math.hypot(spanS, spanY) * 0.6));
-      const baseSpd = Math.min(13.5, Math.max(3.8, impactSpeed * (cell.isInner ? 0.68 : 0.44)));
+      const baseSpd = Math.min(85.0, Math.max(4.5, Math.sqrt(impactSpeed) * (cell.isInner ? 4.2 : 2.8)));
 
       const normalDir = cell.isInner ? (inwardBias < 0 ? 1.0 : -0.65) : (cell.idx % 2 === 0 ? 0.95 : 0.55);
       const vx =
@@ -1856,6 +1856,45 @@ export class DestructionSystem {
       for (let i = 0; i < 5; i++) {
         this._spawnVolumetricPlume(x + (Math.random() - 0.5) * 0.8, 0.5 + i * 0.3, z + (Math.random() - 0.5) * 0.8, 'dust', 0.95 + i * 0.12, 2.4);
       }
+      return;
+    }
+
+    if (kind === 'furniture') {
+      const { subKind } = prop;
+      if (isRestoring) {
+        this._spawnSettledRubbleItem(x + fx * 0.8, 0.22, z + fz * 0.8, 0.75, 0.35, 0.75, prop.primaryColor || this.colors.woodBark);
+        return;
+      }
+      this.spawnDebrisBurst(x, Math.max(0.4, (prop.height || 1.0) * 0.5), z, fx, fz, speed, {
+        count: 8,
+        matA: prop.primaryColor || this.colors.woodSplinter,
+        matB: prop.secondaryColor || this.colors.woodBark,
+        geom: this.geoms.box,
+        scaleMin: 0.14,
+        scaleMax: 0.36,
+        persistent: true,
+      });
+      if (subKind === 'desk' || subKind === 'counter') {
+        this.spawnDebrisBurst(x, 0.85, z, fx, fz, speed * 0.8, {
+          count: 5,
+          matA: this.mats.glassShard,
+          matB: this.mats.furnitureChrome,
+          scaleMin: 0.12,
+          scaleMax: 0.28,
+          persistent: true,
+        });
+      }
+      this._spawnSolidDebrisItem(
+        x, 0.35, z,
+        fx * Math.max(4.0, speed * 0.45) + (Math.random() - 0.5) * 2.0,
+        1.8 + Math.random() * 2.5,
+        fz * Math.max(4.0, speed * 0.45) + (Math.random() - 0.5) * 2.0,
+        0.55, 0.24, 0.48,
+        prop.primaryColor || this.colors.woodBark,
+        0.22,
+        true
+      );
+      this._spawnVolumetricPlume(x, 0.65, z, 'dust', 0.85, 2.0);
     }
   }
 
@@ -2396,6 +2435,8 @@ export class DestructionSystem {
       this.mats.masonryBrickWall = new THREE.MeshStandardNodeMaterial({ color: 0x9b4f3b, roughness: 0.86, metalness: 0.04 });
       this.mats.masonryLimestoneWall = new THREE.MeshStandardNodeMaterial({ color: 0xd4c8b4, roughness: 0.78, metalness: 0.05 });
       this.mats.concreteCoreMat = new THREE.MeshStandardNodeMaterial({ color: 0x76797e, roughness: 0.90, metalness: 0.06 });
+      this.mats.interiorPlaster = new THREE.MeshStandardNodeMaterial({ color: 0xe6e0d5, roughness: 0.88, metalness: 0.02 });
+      this.mats.interiorFloor = new THREE.MeshStandardNodeMaterial({ color: 0x443b32, roughness: 0.76, metalness: 0.06 });
     }
 
     let breachX = x;
@@ -2412,6 +2453,7 @@ export class DestructionSystem {
       let bestScore = Infinity;
       let bestAx = 0, bestAz = 0, bestBx = 0, bestBz = 0, bestLen = 0, bestS = 0;
 
+      // Pass 1: Strict distance and normal match
       let i = 0;
       while (i + 3 < count) {
         const oy0 = origPositions[i * 3 + 1];
@@ -2426,7 +2468,7 @@ export class DestructionSystem {
           const dx = bx - ax;
           const dz = bz - az;
           const len = Math.hypot(dx, dz);
-          if (len >= 2.8) {
+          if (len >= 1.2) {
             const ux = dx / len;
             const uz = dz / len;
             const wnx = -uz;
@@ -2437,8 +2479,8 @@ export class DestructionSystem {
             const pz = az + uz * sClamp;
             const distSq = (x - px) * (x - px) + (z - pz) * (z - pz);
             const dotN = wnx * fnx + wnz * fnz;
-            const score = distSq - dotN * 3.5;
-            if (distSq < 42.0 && score < bestScore) {
+            const score = distSq - dotN * 4.5;
+            if (distSq < 96.0 && score < bestScore) {
               bestScore = score;
               bestQuad = i;
               bestAx = ax;
@@ -2453,6 +2495,48 @@ export class DestructionSystem {
           i += 4;
         } else {
           i += 1;
+        }
+      }
+
+      // Pass 2: Fallback to closest footprint wall segment if high speed jumped past threshold
+      if (bestQuad < 0) {
+        let fallbackScore = Infinity;
+        let fi = 0;
+        while (fi + 3 < count) {
+          const oy0 = origPositions[fi * 3 + 1];
+          const oy2 = origPositions[(fi + 2) * 3 + 1];
+          if (oy0 < 0.5 && oy2 > 1.5) {
+            const ax = origPositions[fi * 3];
+            const az = origPositions[fi * 3 + 2];
+            const bx = origPositions[(fi + 1) * 3];
+            const bz = origPositions[(fi + 1) * 3 + 2];
+            const dx = bx - ax;
+            const dz = bz - az;
+            const len = Math.hypot(dx, dz);
+            if (len >= 1.0) {
+              const ux = dx / len;
+              const uz = dz / len;
+              const sRaw = (x - ax) * ux + (z - az) * uz;
+              const sClamp = Math.max(0, Math.min(len, sRaw));
+              const px = ax + ux * sClamp;
+              const pz = az + uz * sClamp;
+              const distSq = (x - px) * (x - px) + (z - pz) * (z - pz);
+              if (distSq < fallbackScore) {
+                fallbackScore = distSq;
+                bestQuad = fi;
+                bestAx = ax;
+                bestAz = az;
+                bestBx = bx;
+                bestBz = bz;
+                bestLen = len;
+                const edgePad = Math.min(sectionHalfW, len * 0.45);
+                bestS = Math.max(edgePad, Math.min(len - edgePad, sClamp));
+              }
+            }
+            fi += 4;
+          } else {
+            fi += 1;
+          }
         }
       }
 
@@ -2477,17 +2561,174 @@ export class DestructionSystem {
         const exteriorWallMat =
           mesh.material || ((target.tone ?? 0.5) < 0.45 ? this.mats.masonryBrickWall : this.mats.masonryLimestoneWall);
         const topY = origPositions[(bestQuad + 2) * 3 + 1];
-        const fracTopY = Math.min(topY - 0.3, sectionTopY);
 
-        const s0 = Math.max(0, bestS - sectionHalfW);
-        const s1 = Math.min(bestLen, bestS + sectionHalfW);
+        // Breach dimensions scaling with impact speed & kinetic force
+        const breachW = Math.min(bestLen - 0.2, Math.max(4.2, Math.min(22.0, 3.8 + Math.sqrt(impact) * 0.65)));
+        const breachH = Math.min(topY - 0.35, Math.max(3.8, Math.min(14.0, 3.8 + Math.sqrt(impact) * 0.45)));
+        const s0 = Math.max(0, bestS - breachW * 0.5);
+        const s1 = Math.min(bestLen, bestS + breachW * 0.5);
+
+        target._breachedQuads = target._breachedQuads || new Set();
+        if (!target._breachedQuads.has(bestQuad)) {
+          target._breachedQuads.add(bestQuad);
+          // Drop the original intact quad vertices to zero-area underground so the unbroken wall is removed!
+          const posAttr = mesh.geometry?.attributes?.position;
+          if (posAttr) {
+            const arr = posAttr.array;
+            for (let k = 0; k < 4; k++) {
+              const idx = (vStart + bestQuad + k) * 3;
+              arr[idx + 0] = 0;
+              arr[idx + 1] = -500;
+              arr[idx + 2] = 0;
+            }
+            posAttr.clearUpdateRanges();
+            posAttr.addUpdateRange((vStart + bestQuad) * 3, 12);
+            posAttr.needsUpdate = true;
+          }
+
+          target._wallBays = target._wallBays || [];
+          // Build left remaining wall pillar [0 .. s0]
+          if (s0 > 0.45) {
+            const leftPoly = [
+              [0, 0.22],
+              [s0, 0.22],
+              [s0, topY],
+              [0, topY],
+            ];
+            const leftBuilt = this.destructibleBuildingManager.buildWallPrismGeometry(
+              leftPoly, bestLen, topY, boxTuple, wallKind, ux, uz, wallNx, wallNz, reverse, 0.34
+            );
+            if (leftBuilt) {
+              const leftMesh = new THREE.Mesh(leftBuilt.geo, [exteriorWallMat, this.mats.concreteCoreMat]);
+              leftMesh.castShadow = true;
+              leftMesh.receiveShadow = true;
+              leftMesh.position.set(bestAx + ux * leftBuilt.sCenter + wallNx * 0.12, leftBuilt.yCenter, bestAz + uz * leftBuilt.sCenter + wallNz * 0.12);
+              this.group.add(leftMesh);
+              target._wallBays.push({ mesh: leftMesh });
+            }
+          }
+
+          // Build right remaining wall pillar [s1 .. bestLen]
+          if (bestLen - s1 > 0.45) {
+            const rightPoly = [
+              [s1, 0.22],
+              [bestLen, 0.22],
+              [bestLen, topY],
+              [s1, topY],
+            ];
+            const rightBuilt = this.destructibleBuildingManager.buildWallPrismGeometry(
+              rightPoly, bestLen, topY, boxTuple, wallKind, ux, uz, wallNx, wallNz, reverse, 0.34
+            );
+            if (rightBuilt) {
+              const rightMesh = new THREE.Mesh(rightBuilt.geo, [exteriorWallMat, this.mats.concreteCoreMat]);
+              rightMesh.castShadow = true;
+              rightMesh.receiveShadow = true;
+              rightMesh.position.set(bestAx + ux * rightBuilt.sCenter + wallNx * 0.12, rightBuilt.yCenter, bestAz + uz * rightBuilt.sCenter + wallNz * 0.12);
+              this.group.add(rightMesh);
+              target._wallBays.push({ mesh: rightMesh });
+            }
+          }
+
+          // Build top broken lintel above the breach [s0 .. s1] x [breachH .. topY]
+          if (topY - breachH > 0.45) {
+            const lintelPoly = [
+              [s0, breachH],
+              [s1, breachH],
+              [s1, topY],
+              [s0, topY],
+            ];
+            const lintelBuilt = this.destructibleBuildingManager.buildWallPrismGeometry(
+              lintelPoly, bestLen, topY, boxTuple, wallKind, ux, uz, wallNx, wallNz, reverse, 0.34
+            );
+            if (lintelBuilt) {
+              const lintelMesh = new THREE.Mesh(lintelBuilt.geo, [exteriorWallMat, this.mats.concreteCoreMat]);
+              lintelMesh.castShadow = true;
+              lintelMesh.receiveShadow = true;
+              lintelMesh.position.set(bestAx + ux * lintelBuilt.sCenter + wallNx * 0.12, lintelBuilt.yCenter, bestAz + uz * lintelBuilt.sCenter + wallNz * 0.12);
+              this.group.add(lintelMesh);
+              target._wallBays.push({ mesh: lintelMesh });
+            }
+          }
+
+          // Construct 3D interior room enclosure behind the breach (floor, back wall, side walls, ceiling)
+          const inX = -wallNx;
+          const inZ = -wallNz;
+          const roomW = (s1 - s0) + 0.35;
+          const roomDepth = Math.min(8.8, Math.max(5.8, (s1 - s0) * 0.95));
+          const roomMidS = (s0 + s1) * 0.5;
+          const roomMidX = bestAx + ux * roomMidS + inX * (roomDepth * 0.5);
+          const roomMidZ = bestAz + uz * roomMidS + inZ * (roomDepth * 0.5);
+          const roomYaw = Math.atan2(wallNx, wallNz);
+
+          // 1. Interior Floor Slab
+          const floorMesh = new THREE.Mesh(this.geoms.box, this.mats.interiorFloor);
+          floorMesh.scale.set(roomW, 0.12, roomDepth);
+          floorMesh.position.set(roomMidX, 0.22, roomMidZ);
+          floorMesh.rotation.y = roomYaw;
+          floorMesh.receiveShadow = true;
+          this.group.add(floorMesh);
+          target._wallBays.push({ mesh: floorMesh });
+
+          // 2. Interior Back Wall
+          const backWallMesh = new THREE.Mesh(this.geoms.box, this.mats.interiorPlaster);
+          backWallMesh.scale.set(roomW, breachH, 0.22);
+          backWallMesh.position.set(
+            bestAx + ux * roomMidS + inX * roomDepth,
+            0.22 + breachH * 0.5,
+            bestAz + uz * roomMidS + inZ * roomDepth
+          );
+          backWallMesh.rotation.y = roomYaw;
+          backWallMesh.castShadow = true;
+          backWallMesh.receiveShadow = true;
+          this.group.add(backWallMesh);
+          target._wallBays.push({ mesh: backWallMesh });
+
+          // 3. Interior Left Partition Wall
+          const leftWallMesh = new THREE.Mesh(this.geoms.box, this.mats.interiorPlaster);
+          leftWallMesh.scale.set(0.22, breachH, roomDepth);
+          leftWallMesh.position.set(
+            bestAx + ux * s0 + inX * (roomDepth * 0.5),
+            0.22 + breachH * 0.5,
+            bestAz + uz * s0 + inZ * (roomDepth * 0.5)
+          );
+          leftWallMesh.rotation.y = roomYaw;
+          leftWallMesh.castShadow = true;
+          leftWallMesh.receiveShadow = true;
+          this.group.add(leftWallMesh);
+          target._wallBays.push({ mesh: leftWallMesh });
+
+          // 4. Interior Right Partition Wall
+          const rightWallMesh = new THREE.Mesh(this.geoms.box, this.mats.interiorPlaster);
+          rightWallMesh.scale.set(0.22, breachH, roomDepth);
+          rightWallMesh.position.set(
+            bestAx + ux * s1 + inX * (roomDepth * 0.5),
+            0.22 + breachH * 0.5,
+            bestAz + uz * s1 + inZ * (roomDepth * 0.5)
+          );
+          rightWallMesh.rotation.y = roomYaw;
+          rightWallMesh.castShadow = true;
+          rightWallMesh.receiveShadow = true;
+          this.group.add(rightWallMesh);
+          target._wallBays.push({ mesh: rightWallMesh });
+
+          // 5. Interior Ceiling Slab
+          const ceilMesh = new THREE.Mesh(this.geoms.box, this.mats.concreteCoreMat);
+          ceilMesh.scale.set(roomW, 0.14, roomDepth);
+          ceilMesh.position.set(roomMidX, 0.22 + breachH, roomMidZ);
+          ceilMesh.rotation.y = roomYaw;
+          ceilMesh.castShadow = true;
+          this.group.add(ceilMesh);
+          target._wallBays.push({ mesh: ceilMesh });
+        }
+
+        // Now fracture 3D Voronoi wall shards across the opened breach opening [s0 .. s1] x [0.22 .. breachH]
         this.destructibleBuildingManager.fractureWallSection({
           s0,
           s1,
           y0: 0.22,
-          y1: fracTopY,
+          y1: breachH,
           impactS: bestS,
-          impactY: Math.max(0.85, Math.min(fracTopY - 0.55, y + 0.85)),
+          impactY: Math.max(0.85, Math.min(breachH - 0.55, y + 0.85)),
           bestAx,
           bestAz,
           ux,
@@ -2504,6 +2745,27 @@ export class DestructionSystem {
           impactSpeed: impact,
           inwardBias: -1,
         });
+
+        // Register breach opening for pass-through
+        const opening = {
+          x: breachX,
+          z: breachZ,
+          nx: wallNx,
+          nz: wallNz,
+          halfWidth: (s1 - s0) * 0.5 + 0.45,
+          depth: 8.5,
+          maxY: breachH,
+        };
+        if (col) {
+          col._breachOpenings = col._breachOpenings || [];
+          col._breachOpenings.push(opening);
+        }
+        if (Array.isArray(target._colliders)) {
+          for (const c of target._colliders) {
+            c._breachOpenings = c._breachOpenings || [];
+            if (!c._breachOpenings.includes(opening)) c._breachOpenings.push(opening);
+          }
+        }
       }
     } else {
       const tx = -wallNz;
@@ -2534,39 +2796,50 @@ export class DestructionSystem {
       });
     }
 
-    // Spawn 4 collidable & destructible 3D interior furniture models ejected onto the sidewalk/street near the impact
+    // Spawn collidable & destructible 3D interior furniture models INSIDE the room + 1-2 blast fragments outside
     if (target._impactFractures.length < 3) {
       const tx = -wallNz;
       const tz = wallNx;
+      const inX = -wallNx;
+      const inZ = -wallNz;
       const layout =
         stateType === 'office'
           ? [
-              { subKind: 'desk', along: -1.5, out: 1.45, yawOff: 0.35 },
-              { subKind: 'chair', along: -0.45, out: 1.85, yawOff: 0.85 },
-              { subKind: 'bookshelf', along: 1.35, out: 1.35, yawOff: -0.25 },
-              { subKind: 'plant', along: 2.25, out: 1.65, yawOff: 0 },
+              { subKind: 'desk', along: -1.35, depth: 3.2, yawOff: 0.15 },
+              { subKind: 'chair', along: -1.35, depth: 2.2, yawOff: 0.85 },
+              { subKind: 'bookshelf', along: -2.2, depth: 5.5, yawOff: 0 },
+              { subKind: 'bookshelf', along: 2.1, depth: 5.5, yawOff: -0.1 },
+              { subKind: 'table', along: 1.45, depth: 4.2, yawOff: 0.2 },
+              { subKind: 'chair', along: 1.45, depth: 3.2, yawOff: -0.4 },
+              { subKind: 'plant', along: -2.3, depth: 1.8, yawOff: 0 },
+              { subKind: 'sofa', along: 1.5, depth: 2.2, yawOff: -0.25 },
+              { subKind: 'chair', along: 0.35, depth: -1.5, yawOff: 0.75 }, // Blown out by impact
             ]
           : stateType === 'retail'
             ? [
-                { subKind: 'counter', along: -1.45, out: 1.45, yawOff: 0.2 },
-                { subKind: 'table', along: 0.45, out: 1.75, yawOff: 0.4 },
-                { subKind: 'chair', along: 1.45, out: 1.85, yawOff: -0.5 },
-                { subKind: 'plant', along: -2.25, out: 1.6, yawOff: 0 },
+                { subKind: 'counter', along: 0.0, depth: 2.8, yawOff: 0 },
+                { subKind: 'table', along: -1.8, depth: 4.5, yawOff: 0.25 },
+                { subKind: 'bookshelf', along: 2.2, depth: 5.2, yawOff: -0.1 },
+                { subKind: 'chair', along: 0.8, depth: 3.6, yawOff: -0.5 },
+                { subKind: 'plant', along: 2.1, depth: 1.8, yawOff: 0 },
+                { subKind: 'table', along: -0.6, depth: -1.4, yawOff: 0.6 }, // Blown out
               ]
             : [
-                { subKind: 'sofa', along: -1.35, out: 1.5, yawOff: 0.3 },
-                { subKind: 'table', along: 0.35, out: 1.75, yawOff: -0.2 },
-                { subKind: 'chair', along: 1.45, out: 1.8, yawOff: 0.65 },
-                { subKind: 'bookshelf', along: -2.35, out: 1.35, yawOff: -0.15 },
+                { subKind: 'sofa', along: -0.9, depth: 3.2, yawOff: 0.1 },
+                { subKind: 'table', along: -0.9, depth: 2.0, yawOff: 0.35 },
+                { subKind: 'chair', along: 1.3, depth: 2.8, yawOff: -0.45 },
+                { subKind: 'bookshelf', along: -2.1, depth: 5.2, yawOff: 0 },
+                { subKind: 'table', along: 1.5, depth: 4.8, yawOff: 0.15 },
+                { subKind: 'chair', along: 0.4, depth: -1.5, yawOff: 0.8 }, // Blown out
               ];
 
       const baseYaw = Math.atan2(wallNx, wallNz);
       const spawnedProps = [];
       for (const item of layout) {
-        const fxPos = breachX + tx * item.along + wallNx * item.out;
-        const fzPos = breachZ + tz * item.along + wallNz * item.out;
+        const fxPos = breachX + tx * item.along + inX * item.depth;
+        const fzPos = breachZ + tz * item.along + inZ * item.depth;
         const fMesh = this._createFurnitureModel(item.subKind, stateType);
-        fMesh.position.set(fxPos, 0.04, fzPos);
+        fMesh.position.set(fxPos, 0.22, fzPos);
         fMesh.rotation.y = baseYaw + (item.yawOff || 0);
         this.group.add(fMesh);
 
@@ -2574,7 +2847,7 @@ export class DestructionSystem {
           kind: 'furniture',
           subKind: item.subKind,
           x: fxPos,
-          y: 0.04,
+          y: 0.22,
           z: fzPos,
           radius: item.subKind === 'sofa' || item.subKind === 'desk' || item.subKind === 'counter' ? 0.88 : 0.62,
           height: item.subKind === 'bookshelf' ? 1.85 : 1.1,
@@ -2614,6 +2887,17 @@ export class DestructionSystem {
     this.stats.buildingsDamaged = (this.stats.buildingsDamaged || 0) + 1;
 
     target.destroyed = true;
+    if (Array.isArray(target._wallBays)) {
+      for (const wb of target._wallBays) {
+        wb.destroyed = true;
+        if (wb.mesh) {
+          wb.mesh.visible = false;
+          this.group.remove(wb.mesh);
+          wb.mesh.geometry?.dispose();
+        }
+      }
+      target._wallBays.length = 0;
+    }
     if (Array.isArray(target._colliders)) {
       for (const col of target._colliders) {
         col.maxY = 0;
@@ -2721,20 +3005,26 @@ export class DestructionSystem {
       );
     }
 
-    if (target && !target._collapsed && !target._collapsing && (mode === 'helicopter' || mode === 'car' || mode === 'traffic')) {
-      const effImpact = mode === 'helicopter' ? impact * 2.0 : Math.max(1.4, impact);
-      const modeMult = mode === 'helicopter' ? 14.0 : 6.8;
-      target._structuralDamage = (target._structuralDamage || 0) + effImpact * modeMult;
-      const threshold = 26.0;
+    if (target && !target._collapsed && !target._collapsing) {
+      const entityMass = mode === 'helicopter' ? 3200 : (mode === 'car' || mode === 'traffic') ? 1600 : mode === 'cyclist' ? 140 : 90;
+      const kineticEnergy = 0.5 * entityMass * (impact * impact);
+      // Realistic speed & kinetic force scaling:
+      // At 500 MPH (223.5 m/s), 1600kg car delivers ~40 MJ => ~47 damage (takes 2-3 rams to topple building).
+      // At 1000 MPH (447.0 m/s), car delivers ~160 MJ => ~170 damage (instant total building collapse!).
+      const damage = (kineticEnergy / 1050000.0) + (impact * 0.04);
+      target._structuralDamage = (target._structuralDamage || 0) + damage;
+      const threshold = 100.0;
+
+      // Always fracture wall and construct the furnished 3D room breach on every direct hit
+      const fracturedLabel = this._fractureBuildingWallAndSpawnFurniture(target, col, x, y, z, fnx, fnz, impact, isPlayer);
 
       if (target._structuralDamage >= threshold) {
         this.collapseBuilding(target, x, y, z, fnx, fnz, impact, isPlayer, false);
       } else {
-        const fracturedLabel = this._fractureBuildingWallAndSpawnFurniture(target, col, x, y, z, fnx, fnz, impact, isPlayer);
-        const healthPct = Math.max(5, Math.round(100 - (target._structuralDamage / threshold) * 100));
+        const healthPct = Math.max(1, Math.round(100 - (target._structuralDamage / threshold) * 100));
         if (isPlayer) {
           this.lastImpactLabel = fracturedLabel
-            ? `WALL FRACTURED — ${fracturedLabel} (BUILDING HEALTH: ${healthPct}%)`
+            ? `WALL BREACHED — ${fracturedLabel} (BUILDING HEALTH: ${healthPct}%)`
             : `BUILDING STRUCTURAL HEALTH · ${healthPct}%`;
           this.lastImpactTimer = 2.8;
         }
@@ -2746,7 +3036,7 @@ export class DestructionSystem {
             nz: fnz,
             age: 0,
             maxAge: 0.55,
-            amp: Math.min(0.28, 0.08 + impact * 0.025),
+            amp: Math.min(0.35, 0.12 + impact * 0.001),
           });
         }
       }
@@ -2801,6 +3091,21 @@ export class DestructionSystem {
       if (impact > 11.5) {
         this._spawnVolumetricPlume(x, 0.65, z, 'fire', 0.75, 0.6);
       }
+    }
+
+    // Realistic Newton's 3rd Law momentum transfer: blast the struck vehicle backwards down the street
+    if (entityB && (entityB.isTraffic || modeB === 'traffic' || !entityB.isPlayer)) {
+      const impulseSpeed = Math.max(8.5, impact * 0.62);
+      entityB.speed = (entityB.speed || 0) - impulseSpeed * 0.65;
+      entityB.vx = (entityB.vx || 0) - nx * impulseSpeed;
+      entityB.vz = (entityB.vz || 0) - nz * impulseSpeed;
+      entityB.angularVel = (entityB.angularVel || 0) + (Math.random() - 0.5) * Math.min(8.0, impact * 0.18);
+    }
+    if (entityA && (entityA.isTraffic || modeA === 'traffic' || !entityA.isPlayer)) {
+      const impulseSpeed = Math.max(8.5, impact * 0.62);
+      entityA.speed = (entityA.speed || 0) + impulseSpeed * 0.65;
+      entityA.vx = (entityA.vx || 0) + nx * impulseSpeed;
+      entityA.vz = (entityA.vz || 0) + nz * impulseSpeed;
     }
 
     if (entityA) {
