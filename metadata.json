@@ -1,0 +1,6 @@
+{
+  "name": "Slop New York — Physics & Destruction",
+  "description": "Interactive 3D New York City simulation in Walk, Cycle, Car, and Plane/Helicopter modes with full physics-based collisions, destructible street props, trees, buildings, pedestrian knockback, and realistic spatial Web Audio effects.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
