@@ -220,3 +220,67 @@ describe('Speed Controller & Kinetic Energy: 40 MPH Default to Max Light Speed',
   });
 });
 
+describe('High-Altitude Plane & Helicopter Rooftop Collision Physics', () => {
+  const MPH_TO_MS = 0.44704;
+  const SPEED_40_MPH = 40 * MPH_TO_MS;
+  const SPEED_200_MPH = 200 * MPH_TO_MS;
+  const SPEED_500_MPH = 500 * MPH_TO_MS;
+  const SPEED_600_MPH = 600 * MPH_TO_MS;
+  const AIRCRAFT_MASS = 3200; // kg
+
+  function calcAircraftDamage(speed: number) {
+    const kineticEnergy = 0.5 * AIRCRAFT_MASS * (speed * speed);
+    return (kineticEnergy / 1050000.0) + (speed * 0.04);
+  }
+
+  it('inflicts major structural damage (~85%) when aircraft dives at 500 MPH into building roof', () => {
+    const damage500 = calcAircraftDamage(SPEED_500_MPH);
+    assert.ok(damage500 >= 75 && damage500 <= 95, `500 MPH plane dive should deal ~85% damage, got ${damage500}%`);
+    assert.ok(damage500 < 100.0, 'a single 500 MPH dive heavily damages skyscraper without instant collapse');
+  });
+
+  it('inflicts catastrophic >100% damage and triggers instant skyscraper collapse at 600+ MPH dive', () => {
+    const damage600 = calcAircraftDamage(SPEED_600_MPH);
+    assert.ok(damage600 >= 100.0, `600 MPH aircraft dive must exceed 100 HP threshold, got ${damage600}%`);
+  });
+
+  it('correctly calculates 3D impact velocity combining horizontal cruise and vertical dive speed', () => {
+    const horizVx = 40.0;
+    const horizVz = 30.0;
+    const verticalDiveSpeed = -60.0;
+    const total3DSpeed = Math.hypot(horizVx, verticalDiveSpeed, horizVz);
+    assert.ok(Math.abs(total3DSpeed - Math.hypot(50, 60)) < 1e-5);
+    assert.ok(total3DSpeed > Math.hypot(horizVx, horizVz), '3D speed must exceed 2D horizontal speed during dive');
+  });
+
+  it('detects rooftop vertical contact when descending through building roof height maxY', () => {
+    const buildingCollider = {
+      minX: -25,
+      maxX: 25,
+      minZ: -25,
+      maxZ: 25,
+      maxY: 180.0,
+    };
+    const aircraft = {
+      prevY: 184.0,
+      y: 178.5,
+      verticalSpeed: -35.0,
+      x: 0,
+      z: 0,
+    };
+
+    const isInsideFootprint = aircraft.x >= buildingCollider.minX - 1.8 &&
+      aircraft.x <= buildingCollider.maxX + 1.8 &&
+      aircraft.z >= buildingCollider.minZ - 1.8 &&
+      aircraft.z <= buildingCollider.maxZ + 1.8;
+    assert.equal(isInsideFootprint, true);
+
+    const roofY = buildingCollider.maxY;
+    const isRoofHit =
+      (aircraft.y <= roofY + 0.35 && aircraft.y >= roofY - 5.5) ||
+      (aircraft.prevY >= roofY - 0.5 && aircraft.y <= roofY + 0.35) ||
+      (aircraft.y <= roofY + 1.5 && aircraft.verticalSpeed < -1.5);
+    assert.equal(isRoofHit, true, 'aircraft penetrating roof downwards must trigger rooftop collision');
+  });
+});
+

@@ -167,6 +167,9 @@ function buildLandmarks(scene) {
       k.minZ = Math.min(z0, z1);
       k.maxZ = Math.max(z0, z1);
       k.maxY *= sy;
+      if (height && k.maxY < height) {
+        k.maxY = height;
+      }
     }
   }
   const site = (name) => LANDMARK_SITES[name];

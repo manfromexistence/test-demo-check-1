@@ -1107,6 +1107,97 @@ class ThirdPersonControllerManager {
     return out;
   }
 
+  resolveHelicopterRoofCollision(h, step) {
+    if (!h || !h.position) return;
+    const x = h.position.x;
+    const y = h.position.y;
+    const z = h.position.z;
+    const prevY = h._prevY ?? y;
+    const near = this.nearColliders(x, z, 8.0);
+
+    for (let i = 0; i < near.length; i++) {
+      const c = near[i];
+      if (c.destroyed || c._collapsing || c.buildingRecord?.destroyed || c.buildingRecord?._collapsing) continue;
+      const roofY = c.maxY;
+      if (!roofY || roofY <= 1.2) continue;
+
+      let inside = false;
+      if (c.polygon) {
+        const testBody = { car: false, radius: 2.2, hx: 2.2, hz: 2.2, extX: 2.2, extZ: 2.2, sin: 0, cos: 1 };
+        inside = polygonContact(c.polygon, x, z, testBody);
+      } else if (c.obb) {
+        const o = c.obb;
+        const dx = x - o.cx;
+        const dz = z - o.cz;
+        const lx = dx * o.cs - dz * o.sn;
+        const lz = dx * o.sn + dz * o.cs;
+        inside = Math.abs(lx) <= o.hx + 1.8 && Math.abs(lz) <= o.hz + 1.8;
+      } else {
+        inside = x >= c.minX - 1.8 && x <= c.maxX + 1.8 && z >= c.minZ - 1.8 && z <= c.maxZ + 1.8;
+      }
+
+      if (!inside) continue;
+
+      const isRoofHit =
+        (y <= roofY + 0.35 && y >= roofY - 5.5) ||
+        (prevY >= roofY - 0.5 && y <= roofY + 0.35) ||
+        (y <= roofY + 1.5 && (h.verticalSpeed || 0) < -1.5);
+
+      if (isRoofHit) {
+        const sin = Math.sin(h.heading || 0);
+        const cos = Math.cos(h.heading || 0);
+        const horizVx = sin * (h.speed || 0) + (h.vx || 0);
+        const horizVz = cos * (h.speed || 0) + (h.vz || 0);
+        const vertV = Math.abs(h.verticalSpeed || 0);
+        const impactSpeed = Math.hypot(horizVx, vertV, horizVz);
+
+        if (impactSpeed > 0.5 && this._collisionListener) {
+          this.reportCollision(h, c, 'building', x, roofY, z, 0, 1, 0, impactSpeed);
+        }
+
+        const nowMs = performance.now();
+        if (this.destructionSystem && impactSpeed > 0.65 && nowMs - (h._lastRoofHitMs || 0) > 120) {
+          h._lastRoofHitMs = nowMs;
+          this.destructionSystem.onBuildingCollision(
+            h,
+            'helicopter',
+            x,
+            roofY,
+            z,
+            0,
+            0,
+            impactSpeed,
+            true,
+            c
+          );
+        }
+
+        const target = c.buildingRecord || c;
+        const isCollapsed = target && (target.destroyed || target._collapsing || target._collapsed);
+
+        if (isCollapsed) {
+          h.speed *= 0.88;
+          h.verticalSpeed = (h.verticalSpeed || 0) * 0.82;
+          h.vx = (h.vx || 0) * 0.88;
+          h.vz = (h.vz || 0) * 0.88;
+        } else {
+          h.position.y = Math.max(h.position.y, roofY + 0.35);
+          if (h.verticalSpeed < 0) {
+            if (impactSpeed > 2.8) {
+              h.verticalSpeed = Math.abs(h.verticalSpeed) * 0.36;
+              h.speed *= 0.70;
+              h.vx = (h.vx || 0) * 0.70;
+              h.vz = (h.vz || 0) * 0.70;
+            } else {
+              h.verticalSpeed = 0;
+            }
+          }
+        }
+        break;
+      }
+    }
+  }
+
   resolveHorizontalCollision(pos, radius, carEntity = null, entity = carEntity) {
     // The detailed island (the helicopter may roam out over the harbour & the boroughs)
     const heli = this.activeMode === 'helicopter';
@@ -1145,8 +1236,11 @@ class ThirdPersonControllerManager {
           const cos = carEntity ? cosH : Math.cos(entity.heading || 0);
           const totalVx = sin * (entity.speed || 0) + (entity.vx || 0);
           const totalVz = cos * (entity.speed || 0) + (entity.vz || 0);
+          const totalVy = heli ? (entity.verticalSpeed || 0) : 0;
+          const totalSpeed3D = Math.hypot(totalVx, totalVy, totalVz);
           // Positive vn means the entity is moving into the wall (opposite the outward normal nx, nz)
           const vn = -(totalVx * nx + totalVz * nz);
+          const effectiveVn = heli ? Math.max(vn, totalSpeed3D * 0.75, Math.abs(totalVy) * 0.75) : vn;
           const support = carEntity ? Math.abs(nx * cos - nz * sin) * 0.86 + Math.abs(nx * sin + nz * cos) * 2.18 : radius;
           const surfaceX = pos.x + nx * depth;
           const surfaceZ = pos.z + nz * depth;
@@ -1154,12 +1248,12 @@ class ThirdPersonControllerManager {
           const hitY = pos.y + (heli ? 1.35 : 0.56);
           const hitZ = surfaceZ - nz * support;
 
-          if (vn > 0.8 && this._collisionListener) {
-            this.reportCollision(entity, c, 'building', hitX, hitY, hitZ, nx, 0, nz, vn);
+          if ((vn > 0.8 || effectiveVn > 0.8) && this._collisionListener) {
+            this.reportCollision(entity, c, 'building', hitX, hitY, hitZ, nx, 0, nz, Math.max(vn, effectiveVn));
           }
 
           const nowMs = performance.now();
-          if (this.destructionSystem && vn > 0.75 && nowMs - (entity._lastBldgDestroyMs || 0) > 140) {
+          if (this.destructionSystem && (vn > 0.75 || effectiveVn > 0.75) && nowMs - (entity._lastBldgDestroyMs || 0) > 120) {
             entity._lastBldgDestroyMs = nowMs;
             this.destructionSystem.onBuildingCollision(
               entity,
@@ -1169,7 +1263,7 @@ class ThirdPersonControllerManager {
               hitZ,
               nx,
               nz,
-              vn,
+              Math.max(vn, effectiveVn),
               true,
               c
             );
@@ -1719,9 +1813,11 @@ class ThirdPersonControllerManager {
     const heliStep = dt / heliSteps;
 
     for (let s = 0; s < heliSteps; s++) {
+      h._prevY = h.position.y;
       h.position.x += (Math.sin(h.heading) * h.speed + h.vx) * heliStep;
       h.position.z += (Math.cos(h.heading) * h.speed + h.vz) * heliStep;
       h.position.y += h.verticalSpeed * heliStep;
+      this.resolveHelicopterRoofCollision(h, heliStep);
       this.resolveHorizontalCollision(h.position, 4.5, null, h);
       if (this.destructionSystem) {
         this.destructionSystem.checkEntityPropCollisions(h, 'helicopter', heliStep, true);

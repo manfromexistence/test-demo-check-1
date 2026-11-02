@@ -1266,12 +1266,13 @@ export class DestructionSystem {
     }
   }
 
-  _findBuildingColliderNear(x, z) {
+  _findBuildingColliderNear(x, z, y = null) {
     let best = null;
-    let bestDistSq = 18 * 18;
+    let bestDistSq = 48 * 48;
     for (let i = 0; i < this.allColliders.length; i++) {
       const c = this.allColliders[i];
       if (!c.buildingRecord && !c._landmarkSlices) continue;
+      if (y !== null && c.maxY !== undefined && y > c.maxY + 15.0) continue;
       const cx = Math.max(c.minX, Math.min(x, c.maxX));
       const cz = Math.max(c.minZ, Math.min(z, c.maxZ));
       const d2 = (x - cx) * (x - cx) + (z - cz) * (z - cz);
@@ -2428,8 +2429,15 @@ export class DestructionSystem {
     target._impactFractures = target._impactFractures || [];
 
     const bHeight = Math.max(12, target.height || target.origMaxY || 28);
-    const stateType = bHeight > 45 ? 'office' : bHeight > 26 ? 'retail' : 'residential';
-    const stateLabel = stateType === 'office' ? 'OFFICE SUITE' : stateType === 'retail' ? 'STOREFRONT' : 'APARTMENT';
+    const isRoofOrPenthouse = y >= bHeight - 8.0 || y > 15.0;
+    const stateType = isRoofOrPenthouse ? 'office' : bHeight > 45 ? 'office' : bHeight > 26 ? 'retail' : 'residential';
+    const stateLabel = isRoofOrPenthouse
+      ? 'ROOFTOP OBSERVATORY / PENTHOUSE'
+      : stateType === 'office'
+        ? 'OFFICE SUITE'
+        : stateType === 'retail'
+          ? 'STOREFRONT'
+          : 'APARTMENT';
 
     if (!this.mats.masonryBrickWall) {
       this.mats.masonryBrickWall = new THREE.MeshStandardNodeMaterial({ color: 0x9b4f3b, roughness: 0.86, metalness: 0.04 });
@@ -2441,10 +2449,10 @@ export class DestructionSystem {
 
     let breachX = x;
     let breachZ = z;
-    let wallNx = fnx;
-    let wallNz = fnz;
+    let wallNx = (fnx === 0 && fnz === 0) ? 0 : fnx;
+    let wallNz = (fnx === 0 && fnz === 0) ? 1 : fnz;
     const sectionHalfW = 2.6;
-    const sectionTopY = 3.8;
+    const sectionTopY = Math.max(3.8, Math.min(bHeight, y + 2.8));
 
     if (target._footprintSlice) {
       const { mesh, vStart, vEnd, origPositions } = target._footprintSlice;
@@ -2771,13 +2779,16 @@ export class DestructionSystem {
       const tx = -wallNz;
       const tz = wallNx;
       const fallbackMat = (target.tone ?? 0.5) < 0.45 ? this.mats.masonryBrickWall : this.mats.masonryLimestoneWall;
+      const shardY0 = y > 8.0 ? Math.max(0.5, y - 2.8) : 0.22;
+      const shardY1 = y > 8.0 ? Math.min(bHeight + 0.5, y + 2.8) : sectionTopY;
+      const shardImpactY = y > 8.0 ? y : Math.max(0.85, Math.min(sectionTopY - 0.55, y + 0.85));
       this.destructibleBuildingManager.fractureWallSection({
         s0: 0,
         s1: sectionHalfW * 2,
-        y0: 0.22,
-        y1: sectionTopY,
+        y0: shardY0,
+        y1: shardY1,
         impactS: sectionHalfW,
-        impactY: Math.max(0.85, Math.min(sectionTopY - 0.55, y + 0.85)),
+        impactY: shardImpactY,
         bestAx: breachX - tx * sectionHalfW,
         bestAz: breachZ - tz * sectionHalfW,
         ux: tx,
@@ -2943,6 +2954,21 @@ export class DestructionSystem {
       this._spawnVolumetricPlume(px, 1.2 + (k % 3) * 0.9, pz, k % 3 === 0 ? 'blackSmoke' : 'dust', 1.85, 3.0);
     }
 
+    if (y > 10.0) {
+      const roofPlumeY = Math.min(bHeight, y);
+      for (let k = 0; k < 8; k++) {
+        const ang = (k / 8) * Math.PI * 2;
+        const px = cx + Math.cos(ang) * (maxX - minX) * 0.34;
+        const pz = cz + Math.sin(ang) * (maxZ - minZ) * 0.34;
+        this._spawnVolumetricPlume(px, roofPlumeY + (k % 3) * 1.5, pz, k % 2 === 0 ? 'blackSmoke' : 'dust', 2.2, 3.2);
+        this._spawnSolidDebrisItem(
+          px, roofPlumeY + 1.0, pz,
+          Math.cos(ang) * (4.5 + Math.random() * 6.5), 3.5 + Math.random() * 4.5, Math.sin(ang) * (4.5 + Math.random() * 6.5),
+          0.85, 0.42, 0.85, this.colors.concrete, 0.25, true
+        );
+      }
+    }
+
     this.savedState.collapsedBuildings.push({
       cx: Math.round(cx * 10) / 10,
       cz: Math.round(cz * 10) / 10,
@@ -2989,20 +3015,21 @@ export class DestructionSystem {
   /**
    * Handles building collisions:
    * - Fractures 3D Voronoi wall shards with the building's exact exterior TSL material & world-space normals (zero dummy walls).
+   * - Supports both ground-floor vehicular impacts and high-altitude/rooftop aircraft dives with proportional kinetic energy.
    * - Any solid vehicle ram (impact >= 3.8 m/s) or 2 lighter hits triggers a full 3D structural tilt-and-fall building collapse.
    */
   onBuildingCollision(entity, mode, x, y, z, nx, nz, speed, isPlayer = false, collider = null) {
     const impact = Math.max(1.5, speed);
-    const nLen = Math.hypot(nx, nz) || 1;
-    const fnx = nx / nLen;
-    const fnz = nz / nLen;
+    const nLen = Math.hypot(nx, nz);
+    const fnx = nLen > 0.001 ? nx / nLen : (Math.random() > 0.5 ? 0.707 : -0.707);
+    const fnz = nLen > 0.001 ? nz / nLen : (Math.random() > 0.5 ? 0.707 : -0.707);
 
-    const col = collider || this._findBuildingColliderNear(x, z);
+    const col = collider || this._findBuildingColliderNear(x, z, y);
     const target = col ? (col.buildingRecord || col) : null;
 
-    this._spawnSparkStreaks(x + fnx * 0.25, Math.max(0.5, y + 0.35), z + fnz * 0.25, fnx, fnz, impact, 14);
+    this._spawnSparkStreaks(x + fnx * 0.25, Math.max(0.5, y + 0.35), z + fnz * 0.25, fnx, fnz, impact, 16);
     this.spawnDebrisBurst(x + fnx * 0.3, Math.max(0.7, y + 0.6), z + fnz * 0.3, fnx, fnz, impact * 0.95, {
-      count: mode === 'person' ? 2 : Math.min(12, Math.max(4, Math.floor(impact * 0.7))),
+      count: mode === 'person' ? 2 : Math.min(14, Math.max(4, Math.floor(impact * 0.7))),
       matA: this.mats.glassShard,
       matB: this.mats.glassShard,
       scaleMin: 0.18,
@@ -3028,21 +3055,25 @@ export class DestructionSystem {
       // Realistic speed & kinetic force scaling:
       // At 500 MPH (223.5 m/s), 1600kg car delivers ~40 MJ => ~47 damage (takes 2-3 rams to topple building).
       // At 1000 MPH (447.0 m/s), car delivers ~160 MJ => ~170 damage (instant total building collapse!).
+      // Aircraft at 3200kg diving down delivers 2x momentum => massive rooftop structural damage.
       const damage = (kineticEnergy / 1050000.0) + (impact * 0.04);
       target._structuralDamage = (target._structuralDamage || 0) + damage;
       const threshold = 100.0;
 
-      // Always fracture wall and construct the furnished 3D room breach on every direct hit
+      // Always fracture wall/roof and construct the furnished 3D room breach on every direct hit
       const fracturedLabel = this._fractureBuildingWallAndSpawnFurniture(target, col, x, y, z, fnx, fnz, impact, isPlayer);
 
       if (target._structuralDamage >= threshold) {
         this.collapseBuilding(target, x, y, z, fnx, fnz, impact, isPlayer, false);
       } else {
         const healthPct = Math.max(1, Math.round(100 - (target._structuralDamage / threshold) * 100));
+        const bHeight = Math.max(12, target.height || target.origMaxY || 28);
+        const isRoofImpact = y > 15.0 || (bHeight > 10 && y >= bHeight - 8.0);
         if (isPlayer) {
-          this.lastImpactLabel = fracturedLabel
-            ? `WALL BREACHED — ${fracturedLabel} (BUILDING HEALTH: ${healthPct}%)`
-            : `BUILDING STRUCTURAL HEALTH · ${healthPct}%`;
+          const bannerPrefix = isRoofImpact
+            ? 'ROOFTOP IMPACT — PENTHOUSE BREACHED'
+            : (fracturedLabel ? `WALL BREACHED — ${fracturedLabel}` : 'BUILDING IMPACT');
+          this.lastImpactLabel = `${bannerPrefix} (BUILDING HEALTH: ${healthPct}%)`;
           this.lastImpactTimer = 2.8;
         }
         if (!target._shuddering) {
